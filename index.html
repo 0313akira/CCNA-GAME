@@ -59,7 +59,7 @@
           <div class="panel topo-panel">
             <div class="panel-head">
               <span>トポロジ</span>
-              <span class="legend"><i class="dot up"></i>up <i class="dot down"></i>down <i class="dot admin"></i>shutdown <i class="trunk-mark"></i>trunk</span>
+              <span class="legend"><i class="dot up"></i>up <i class="dot down"></i>down <i class="dot admin"></i>shutdown <i class="dot blk"></i>STP block <i class="trunk-mark"></i>trunk</span>
             </div>
             <svg id="topo" viewBox="0 0 860 420" preserveAspectRatio="xMidYMid meet"></svg>
           </div>
@@ -93,6 +93,24 @@
       </div>
     </section>
 
+    <!-- ============================ SUBNET DOJO ============================ -->
+    <section id="subnet" class="screen">
+      <header class="topbar">
+        <button class="btn icon" id="sn-back" title="ホームへ">←</button>
+        <div class="title-wrap">
+          <span class="chapter">TRAINING · サブネット計算</span>
+          <h2>🧮 サブネット道場</h2>
+        </div>
+        <div class="sn-stat"><span id="sn-progress"></span><span id="sn-score"></span></div>
+        <div class="timer" id="sn-timer">00:00</div>
+      </header>
+      <div class="sn-bar-wrap"><div class="sn-bar" id="sn-bar"></div></div>
+      <div class="sn-wrap">
+        <div class="panel sn-card" id="sn-card"></div>
+        <p class="sn-tip">答えは半角で入力して Enter。サブネットマスクの覚え方: <code>128 192 224 240 248 252 254 255</code></p>
+      </div>
+    </section>
+
     <!-- ============================ MODAL ============================ -->
     <div class="modal-bg" id="modal-bg">
       <div class="modal" id="modal">
@@ -104,6 +122,9 @@
     <script src="js/netsim.js"></script>
     <script src="js/ios.js"></script>
     <script src="js/levels.js"></script>
+    <script src="js/lessons.js"></script>
+    <script src="js/random.js"></script>
+    <script src="js/subnet.js"></script>
     <script src="js/cheatsheet.js"></script>
     <script src="js/app.js"></script>
   </body>

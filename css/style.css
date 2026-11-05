@@ -13,6 +13,7 @@
   --warn: #fbbf24;
   --admin: #f87171;
   --down: #64748b;
+  --blk: #fb923c;
   --term-bg: #060a14;
   --term-fg: #cfe3ff;
   --mono: 'JetBrains Mono', 'Cascadia Code', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
@@ -347,6 +348,9 @@ b {
 }
 .dot.admin {
   background: var(--admin);
+}
+.dot.blk {
+  background: var(--blk);
 }
 .trunk-mark {
   display: inline-block;
@@ -758,6 +762,257 @@ b {
 .cheat .modes {
   font: 12px var(--mono);
   color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- tutorial / modes */
+.tut-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.16), rgba(129, 140, 248, 0.12));
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  border-radius: 16px;
+  padding: 16px 20px;
+  margin-top: 8px;
+  transition: transform 0.15s, border-color 0.15s;
+}
+.tut-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+.tut-card > div {
+  flex: 1;
+}
+.tut-card h3 {
+  margin: 2px 0 2px;
+  font-size: 18px;
+}
+.tut-card p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tut-card .no {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.tut-icon {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  color: #fff;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb);
+}
+.tut-card .go {
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.tut-card .stars {
+  color: var(--warn);
+  letter-spacing: 2px;
+}
+.tut-card .stars .off {
+  color: #39445f;
+}
+.card.mode {
+  background: linear-gradient(160deg, var(--panel2), var(--panel));
+}
+.card.mode p {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.mode-icon {
+  font-size: 26px;
+}
+.timer.warn {
+  color: var(--ng);
+  font-weight: 700;
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ---------------------------------------------------------------- lesson / quiz */
+.clear-box .sub {
+  color: var(--muted);
+  font-size: 13px;
+}
+.clear-box .big.ng {
+  background: linear-gradient(90deg, #f87171, #fbbf24);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.rec {
+  color: var(--warn);
+  font-weight: 700;
+}
+.lesson {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.07);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  font-size: 13.5px;
+}
+.lesson h3,
+.quiz h3 {
+  margin: 0 0 6px !important;
+}
+.lesson ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+.quiz {
+  margin-top: 14px;
+}
+.quiz-q {
+  background: var(--bg2);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  font-size: 13.5px;
+}
+.quiz-q p {
+  margin: 0 0 8px;
+}
+.choices {
+  display: grid;
+  gap: 6px;
+}
+.btn.choice {
+  text-align: left;
+  white-space: normal;
+}
+.btn.right,
+.sn-input input.right {
+  border-color: var(--ok) !important;
+  background: rgba(52, 211, 153, 0.15) !important;
+}
+.btn.wrong,
+.sn-input input.wrong {
+  border-color: var(--ng) !important;
+  background: rgba(248, 113, 113, 0.15) !important;
+}
+.why {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #c3cde2;
+}
+.okc {
+  color: var(--ok);
+}
+.ngc {
+  color: var(--ng);
+}
+
+/* ---------------------------------------------------------------- subnet dojo */
+#subnet.active {
+  min-height: 100vh;
+}
+.sn-stat {
+  display: flex;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+}
+.sn-bar-wrap {
+  height: 4px;
+  background: var(--panel2);
+}
+.sn-bar {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent), #818cf8);
+  transition: width 0.3s;
+}
+.sn-wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+.sn-card {
+  padding: 22px;
+}
+.sn-q {
+  font-size: 19px;
+  line-height: 1.7;
+  margin-bottom: 16px;
+}
+.sn-q code {
+  font-size: 0.95em;
+}
+.sn-input {
+  display: flex;
+  gap: 8px;
+}
+.sn-input input {
+  flex: 1;
+  min-width: 0;
+  font: 18px var(--mono);
+  color: #fff;
+  background: var(--term-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  outline: none;
+}
+.sn-input input:focus {
+  border-color: var(--accent);
+}
+.sn-choices {
+  display: flex;
+  gap: 10px;
+}
+.sn-choices .btn {
+  flex: 1;
+  font-size: 17px;
+  padding: 12px;
+}
+.sn-fb {
+  margin-top: 16px;
+}
+.sn-fb .btn {
+  margin-top: 12px;
+}
+.big2 {
+  font-size: 18px;
+  font-weight: 700;
+}
+.sn-explain {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--bg2);
+  border-radius: 8px;
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+.sn-rank {
+  font-size: 22px;
+  margin: 4px 0;
+}
+.sn-tip {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+.row.center {
+  justify-content: center;
 }
 
 /* ---------------------------------------------------------------- responsive */

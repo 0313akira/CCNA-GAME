@@ -53,6 +53,7 @@
   // ----------------------------------------------------- interface name utils
   const IF_TYPES = [
     // [lower, Full, cdp, short, rank]
+    ['port-channel', 'Port-channel', 'Por', 'Po', -1],
     ['fastethernet', 'FastEthernet', 'Fas', 'Fa', 0],
     ['gigabitethernet', 'GigabitEthernet', 'Gig', 'Gi', 1],
     ['loopback', 'Loopback', 'Loo', 'Lo', 2],
@@ -60,7 +61,7 @@
   ];
   function canonIf(str) {
     const s = String(str).replace(/\s+/g, '').toLowerCase();
-    const m = s.match(/^([a-z]+)(\d[\d/.]*)$/);
+    const m = s.match(/^([a-z-]+)(\d[\d/.]*)$/);
     if (!m) return null;
     const t = IF_TYPES.find((x) => x[0].startsWith(m[1]));
     if (!t) return null;
@@ -99,7 +100,7 @@
     return Object.assign(
       {
         name,
-        kind, // phys | sub | svi | loop
+        kind, // phys | sub | svi | loop | po
         ip: null,
         mask: null,
         shutdown: false,
@@ -115,6 +116,10 @@
         nat: null,
         ospfCost: null,
         helper: null,
+        ip6: null,
+        channel: null,
+        portfast: false,
+        bpduguard: false,
         peer: null,
       },
       extra || {}
@@ -146,6 +151,10 @@
     d.gateway = null;
     d.dns = null;
     d.dhcpClient = false;
+    d.ipv6Routing = false;
+    d.staticRoutes6 = [];
+    d.gateway6 = null;
+    d.stp = { mode: 'pvst', prio: new Map() };
   }
 
   function addIface(d, i) {
@@ -201,7 +210,7 @@
   }
 
   function buildNet(devSpecs, links) {
-    const net = { devices: {}, links: [], specs: {}, _cache: null, pingSeen: new Set() };
+    const net = { devices: {}, links: [], specs: {}, _cache: null, pingSeen: new Set(), seen: new Set() };
     for (const s of devSpecs) {
       net.devices[s.id] = makeDevice(s);
       net.specs[s.id] = s;
@@ -232,7 +241,7 @@
     net._cache = null;
   }
   function cache(net) {
-    if (!net._cache) net._cache = { rt: {}, ospf: null };
+    if (!net._cache) net._cache = { rt: {}, rt6: {}, ospf: null, stp: {}, ch: {} };
     return net._cache;
   }
 
@@ -271,6 +280,8 @@
         const v = Number(i.name.slice(4));
         return !i.shutdown && d.vlans.has(v) && vlanHasActivePort(d, v);
       }
+      case 'po':
+        return !i.shutdown && channelInfo(d, Number(i.name.slice(12))).bundled.length > 0;
     }
     return false;
   }
@@ -309,6 +320,7 @@
           v = tag === null ? pi.nativeVlan : tag;
           if (!trunkAllows(pi, v)) return;
         }
+        if (stpRole(net, pd, pi, v) === 'Altn') return;
         visitVlan(pd, v, np);
       } else if (pd.type === 'router') {
         if (tag === null) addEP(pd, pi, np);
@@ -324,6 +336,9 @@
       if (svi && !svi.shutdown) addEP(sw, svi, path);
       for (const p of physPorts(sw)) {
         if (!linkUp(sw, p)) continue;
+        const b = bundleOf(sw, p);
+        if (b && !b.primary) continue;
+        if (stpRole(net, sw, p, v) === 'Altn') continue;
         if (opMode(sw, p) === 'access') {
           if (p.accessVlan === v) deliver(sw, p, null, path);
         } else if (trunkAllows(p, v)) deliver(sw, p, v === p.nativeVlan ? null : v, path);
@@ -692,10 +707,11 @@
   function ping(net, origin, dst, opts) {
     opts = opts || {};
     const ctx = { record: !!opts.record, nat: [] };
-    const fwd = sendPacket(net, ctx, origin, { src: opts.src != null ? opts.src : null, dst, ttl: baseTtl(origin) });
+    const send = typeof dst === 'bigint' ? sendPacket6 : sendPacket;
+    const fwd = send(net, ctx, origin, { src: opts.src != null ? opts.src : null, dst, ttl: baseTtl(origin) });
     if (!fwd.ok) return { ok: false, stage: 'fwd', fwd };
     if (fwd.dev === origin) return { ok: true, fwd, rev: fwd, ttl: baseTtl(origin) };
-    const rev = sendPacket(net, ctx, fwd.dev, { src: fwd.pkt.dst, dst: fwd.pkt.src, ttl: baseTtl(fwd.dev) });
+    const rev = send(net, ctx, fwd.dev, { src: fwd.pkt.dst, dst: fwd.pkt.src, ttl: baseTtl(fwd.dev) });
     const ok = rev.ok && rev.dev === origin;
     return { ok, stage: ok ? null : 'rev', fwd, rev, ttl: rev.pkt.ttl };
   }
@@ -703,7 +719,8 @@
   /** traceroute: 各ホップの応答可否も判定 */
   function trace(net, origin, dst) {
     const ctx = { record: false, nat: [] };
-    const fwd = sendPacket(net, ctx, origin, { src: null, dst, ttl: 64 });
+    const send = typeof dst === 'bigint' ? sendPacket6 : sendPacket;
+    const fwd = send(net, ctx, origin, { src: null, dst, ttl: 64 });
     const src = fwd.pkt.origSrc != null ? fwd.pkt.origSrc : fwd.pkt.src;
     const out = [];
     for (let k = 0; k < fwd.hops.length; k++) {
@@ -712,10 +729,10 @@
       let ok;
       if (last) ok = ping(net, origin, dst).ok;
       else {
-        const r = src == null ? { ok: false } : sendPacket(net, { record: false, nat: ctx.nat.slice() }, h.dev, { src: h.iface.ip, dst: h.src, ttl: 64 });
+        const r = src == null ? { ok: false } : send(net, { record: false, nat: ctx.nat.slice() }, h.dev, { src: typeof dst === 'bigint' ? (h.iface.ip6 ? h.iface.ip6.addr : null) : h.iface.ip, dst: h.src, ttl: 64 });
         ok = r.ok && r.dev === origin;
       }
-      out.push({ ip: last ? fwd.pkt.dst : h.iface.ip, ok, dev: h.dev });
+      out.push({ ip: last ? fwd.pkt.dst : typeof dst === 'bigint' ? (h.iface.ip6 ? h.iface.ip6.addr : null) : h.iface.ip, ok, dev: h.dev });
     }
     return { hops: out, complete: fwd.ok && out.length && out[out.length - 1].ok, fwd };
   }
@@ -755,6 +772,15 @@
     }
     return { ok: false };
   }
+  /** IP を持っていない DHCP クライアントは定期的に再試行する (実機の Windows と同じ) */
+  function dhcpRetry(net) {
+    const got = [];
+    for (const d of Object.values(net.devices)) {
+      if (!isHost(d) || !d.dhcpClient || d.ifaces.FastEthernet0.ip != null) continue;
+      if (dhcpRequest(net, d).ok) got.push(d.id);
+    }
+    return got;
+  }
   function findPool(r, ip) {
     return Object.values(r.dhcp.pools).find((p) => p.network != null && inSubnet(ip, p.network, p.mask));
   }
@@ -775,6 +801,333 @@
     }
     return null;
   }
+
+
+  // ------------------------------------------------------------ EtherChannel
+  const LACP = ['active', 'passive'],
+    PAGP = ['desirable', 'auto'];
+  function chCompatible(a, b) {
+    if (a === 'on' || b === 'on') return a === 'on' && b === 'on';
+    if (LACP.includes(a) && LACP.includes(b)) return a === 'active' || b === 'active';
+    if (PAGP.includes(a) && PAGP.includes(b)) return a === 'desirable' || b === 'desirable';
+    return false;
+  }
+  const setKey = (s) => (s === null ? 'all' : [...s].sort((x, y) => x - y).join(','));
+  function sameL2(a, b) {
+    return a.mode === b.mode && a.accessVlan === b.accessVlan && a.nativeVlan === b.nativeVlan && setKey(a.allowed) === setKey(b.allowed);
+  }
+  function channelInfo(d, g) {
+    const po = d.ifaces['Port-channel' + g] || null;
+    const members = physPorts(d).filter((p) => p.channel && p.channel.group === g);
+    const st = new Map();
+    let peerDev = null,
+      peerGroup = null;
+    for (const m of members) {
+      let s = 'D';
+      if (!m.shutdown && linkUp(d, m)) {
+        const pi = m.peer.iface,
+          pd = m.peer.dev;
+        const ppo = pi.channel ? pd.ifaces['Port-channel' + pi.channel.group] : null;
+        if (po && !sameL2(m, po)) s = 's';
+        else if (pd.type === 'switch' && pi.channel && chCompatible(m.channel.mode, pi.channel.mode) && (!ppo || sameL2(pi, ppo))) {
+          if (peerDev === null) {
+            peerDev = pd;
+            peerGroup = pi.channel.group;
+          }
+          s = pd === peerDev && pi.channel.group === peerGroup ? 'P' : 'I';
+        } else s = 'I';
+      }
+      st.set(m, s);
+    }
+    const bundled = members.filter((m) => st.get(m) === 'P');
+    const mode0 = members.length ? members[0].channel.mode : 'on';
+    const proto = mode0 === 'on' ? '-' : LACP.includes(mode0) ? 'LACP' : 'PAgP';
+    return { po, members, st, bundled, proto };
+  }
+  function bundleOf(d, p) {
+    if (d.type !== 'switch' || !p.channel) return null;
+    const info = channelInfo(d, p.channel.group);
+    if (info.st.get(p) !== 'P') return null;
+    return { name: 'Port-channel' + p.channel.group, primary: info.bundled[0] === p, info };
+  }
+  /** 論理ポート一覧 (束ねられたポートは Port-channel 1 本として扱う) */
+  function logicalPorts(d) {
+    const out = [];
+    const seen = new Set();
+    for (const p of physPorts(d)) {
+      const b = bundleOf(d, p);
+      if (b) {
+        if (seen.has(b.name)) continue;
+        seen.add(b.name);
+        out.push({ name: b.name, rep: p, po: true });
+      } else out.push({ name: p.name, rep: p, po: false });
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------ STP (PVST)
+  function carries(sw, p, v) {
+    return opMode(sw, p) === 'access' ? p.accessVlan === v : trunkAllows(p, v);
+  }
+  function portNum(name) {
+    const n = Number(name.split(/[/l]/).pop());
+    if (name.startsWith('Port-channel')) return 64 + Number(name.slice(12));
+    return name.startsWith('Gigabit') ? 24 + n : n;
+  }
+  function bridgeMac(sw) {
+    return sw.bmac || macOf(sw, sw.ifaces.Vlan1);
+  }
+  function bridgePrio(sw, v) {
+    const p = sw.stp.prio.get(v);
+    return (p == null ? 32768 : p) + v;
+  }
+  const cmpBid = (a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
+  function cmpVec(a, b) {
+    return cmpBid(a.root, b.root) || a.cost - b.cost || cmpBid(a.sbid, b.sbid) || a.spid - b.spid || a.ppid - b.ppid;
+  }
+  function computeStp(net, v) {
+    const c = cache(net);
+    if (c.stp[v]) return c.stp[v];
+    const info = {};
+    const sws = Object.values(net.devices).filter((d) => d.type === 'switch' && d.vlans.has(v));
+    for (const sw of sws) {
+      const bid = [bridgePrio(sw, v), bridgeMac(sw)];
+      const ports = [];
+      for (const lp of logicalPorts(sw)) {
+        const p = lp.rep;
+        if (!linkUp(sw, p) || !carries(sw, p, v)) continue;
+        const name = lp.name;
+        const cost = lp.po ? 3 : p.name.startsWith('Gigabit') ? 4 : 19;
+        let peer = null;
+        const pd = p.peer.dev,
+          pi = p.peer.iface;
+        if (pd.type === 'switch' && pd.vlans.has(v) && carries(pd, pi, v)) {
+          const pb = bundleOf(pd, pi);
+          peer = { id: pd.id, name: pb ? pb.name : pi.name };
+        }
+        ports.push({ name, rep: p, cost, pid: portNum(name), peer, edge: p.portfast });
+      }
+      info[sw.id] = { sw, bid, ports, best: { root: bid, cost: 0, sbid: bid, spid: 0, ppid: 0 }, rootPort: null };
+    }
+    for (let it = 0; it < sws.length + 2; it++) {
+      for (const id in info) {
+        const I = info[id];
+        let best = { root: I.bid, cost: 0, sbid: I.bid, spid: 0, ppid: 0 },
+          rp = null;
+        for (const pt of I.ports) {
+          if (!pt.peer) continue;
+          const N = info[pt.peer.id];
+          const np = N.ports.find((x) => x.name === pt.peer.name);
+          if (!np) continue;
+          const cand = { root: N.best.root, cost: N.best.cost + pt.cost, sbid: N.bid, spid: np.pid, ppid: pt.pid };
+          if (cmpBid(cand.root, I.bid) < 0 && (rp === null ? true : cmpVec(cand, best) < 0)) {
+            best = cand;
+            rp = pt;
+          }
+        }
+        I.best = best;
+        I.rootPort = rp;
+      }
+    }
+    for (const id in info) {
+      const I = info[id];
+      for (const pt of I.ports) {
+        if (pt === I.rootPort) pt.role = 'Root';
+        else if (!pt.peer) pt.role = 'Desg';
+        else {
+          const N = info[pt.peer.id];
+          const np = N.ports.find((x) => x.name === pt.peer.name);
+          const mine = { root: I.best.root, cost: I.best.cost, sbid: I.bid, spid: pt.pid, ppid: 0 };
+          const his = { root: N.best.root, cost: N.best.cost, sbid: N.bid, spid: np ? np.pid : 0, ppid: 0 };
+          pt.role = cmpVec(mine, his) < 0 ? 'Desg' : 'Altn';
+        }
+      }
+    }
+    c.stp[v] = info;
+    return info;
+  }
+  function stpRole(net, sw, p, v) {
+    if (sw.type !== 'switch') return 'Desg';
+    const I = computeStp(net, v)[sw.id];
+    if (!I) return 'Desg';
+    const b = bundleOf(sw, p);
+    const name = b ? b.name : p.name;
+    const pt = I.ports.find((x) => x.name === name);
+    return pt ? pt.role : 'Desg';
+  }
+  /** ポートがいずれかの VLAN でブロックされているか (トポロジ表示用) */
+  function portBlocked(net, sw, p) {
+    if (sw.type !== 'switch' || !linkUp(sw, p)) return false;
+    const vl = opMode(sw, p) === 'access' ? [p.accessVlan] : [...sw.vlans.keys()].filter((v) => trunkAllows(p, v));
+    return vl.some((v) => stpRole(net, sw, p, v) === 'Altn');
+  }
+
+  // ------------------------------------------------------------ IPv6
+  function ip6Parse(s) {
+    if (typeof s !== 'string' || s.indexOf(':') < 0 || !/^[0-9a-fA-F:]+$/.test(s)) return null;
+    const dbl = s.split('::');
+    if (dbl.length > 2) return null;
+    const part = (x) => (x === '' ? [] : x.split(':'));
+    const a = part(dbl[0]),
+      b = dbl.length === 2 ? part(dbl[1]) : [];
+    if (dbl.length === 1 && a.length !== 8) return null;
+    if (dbl.length === 2 && a.length + b.length > 7) return null;
+    const groups = dbl.length === 2 ? a.concat(Array(8 - a.length - b.length).fill('0'), b) : a;
+    let n = 0n;
+    for (const g of groups) {
+      if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;
+      n = (n << 16n) | BigInt(parseInt(g, 16));
+    }
+    return n;
+  }
+  function ip6Str(n) {
+    if (n === null || n === undefined) return 'unassigned';
+    const g = [];
+    for (let k = 7; k >= 0; k--) g.push(Number((n >> BigInt(16 * k)) & 0xffffn));
+    let bs = -1,
+      bl = 0;
+    for (let i = 0; i < 8; ) {
+      if (g[i] === 0) {
+        let j = i;
+        while (j < 8 && g[j] === 0) j++;
+        if (j - i > bl && j - i >= 2) {
+          bs = i;
+          bl = j - i;
+        }
+        i = j;
+      } else i++;
+    }
+    const hex = (x) => x.toString(16).toUpperCase();
+    if (bs < 0) return g.map(hex).join(':');
+    return g.slice(0, bs).map(hex).join(':') + '::' + g.slice(bs + bl).map(hex).join(':');
+  }
+  const mask6 = (p) => (p === 0 ? 0n : ((1n << BigInt(p)) - 1n) << BigInt(128 - p));
+  const in6 = (a, net, p) => ((a ^ net) & mask6(p)) === 0n;
+  function parsePfx6(s) {
+    const m = String(s).match(/^(.+)\/(\d{1,3})$/);
+    if (!m) return null;
+    const a = ip6Parse(m[1]),
+      p = Number(m[2]);
+    if (a === null || p > 128) return null;
+    return { addr: a, plen: p };
+  }
+  function eui64(d, i) {
+    const mac = macOf(d, i).replace(/\./g, '');
+    const b0 = (parseInt(mac.slice(0, 2), 16) ^ 0x02).toString(16).padStart(2, '0');
+    return BigInt('0x' + b0 + mac.slice(2, 6) + 'fffe' + mac.slice(6));
+  }
+  const LL_PREFIX = 0xfe80n << 112n;
+  const isLL = (a) => a >> 118n === 0x3fan;
+  function hasV6(d, i) {
+    return isHost(d) ? !!(i.ip6 || d.gateway6 != null || d.v6on) : !!(i.ip6 || i.v6en);
+  }
+  function linkLocal(d, i) {
+    return LL_PREFIX | eui64(d, i);
+  }
+  function up6(d, i) {
+    return (isHost(d) ? linkUp(d, i) : ifUp(d, i)) && hasV6(d, i);
+  }
+  function routingTable6(net, d) {
+    const c = cache(net);
+    if (c.rt6[d.id]) return c.rt6[d.id];
+    const cands = [];
+    for (const i of sortedIfaces(d)) {
+      if (!i.ip6 || !ifUp(d, i)) continue;
+      cands.push({ code: 'C', net: i.ip6.addr & mask6(i.ip6.plen), plen: i.ip6.plen, ad: 0, via: [{ ip: null, iface: i }] });
+      cands.push({ code: 'L', net: i.ip6.addr, plen: 128, ad: 0, via: [{ ip: null, iface: i }] });
+    }
+    for (const r of d.staticRoutes6) {
+      let ok;
+      if (r.iface) {
+        const i = d.ifaces[r.iface];
+        ok = !!i && ifUp(d, i);
+      } else ok = cands.some((e) => e.code === 'C' && in6(r.nh, e.net, e.plen));
+      if (ok) cands.push({ code: 'S', net: r.net, plen: r.plen, ad: r.ad, via: [{ ip: r.nh, iface: r.iface ? d.ifaces[r.iface] : null }] });
+    }
+    const best = new Map();
+    for (const e of cands) {
+      const k = e.net.toString() + '/' + e.plen + e.code[0];
+      const kk = e.code === 'L' ? k : e.net.toString() + '/' + e.plen;
+      const cur = best.get(kk);
+      if (!cur || e.ad < cur.ad) best.set(kk, e);
+    }
+    const rt = [...best.values()].sort((a, b) => (a.net < b.net ? -1 : a.net > b.net ? 1 : a.plen - b.plen));
+    c.rt6[d.id] = rt;
+    return rt;
+  }
+  function lpm6(rt, dst) {
+    let best = null;
+    for (const e of rt) if (e.code !== 'L' && in6(dst, e.net, e.plen) && (!best || e.plen > best.plen)) best = e;
+    return best;
+  }
+  function routeLookup6(net, d, dst) {
+    if (d.type !== 'router') {
+      const i = d.ifaces.FastEthernet0;
+      if (!i || !linkUp(d, i) || !hasV6(d, i)) return null;
+      if (isLL(dst) || (i.ip6 && in6(dst, i.ip6.addr, i.ip6.plen))) return { iface: i, nh: dst };
+      if (d.gateway6 != null) return { iface: i, nh: d.gateway6 };
+      return null;
+    }
+    const rt = routingTable6(net, d);
+    const e = lpm6(rt, dst);
+    if (!e) return null;
+    const v = e.via[0];
+    if (v.iface) return { iface: v.iface, nh: v.ip != null ? v.ip : dst };
+    const e2 = lpm6(rt, v.ip);
+    if (!e2 || !e2.via[0].iface) return null;
+    return { iface: e2.via[0].iface, nh: v.ip };
+  }
+  function owns6(d, a) {
+    for (const i of Object.values(d.ifaces)) {
+      if (!up6(d, i)) continue;
+      if ((i.ip6 && i.ip6.addr === a) || linkLocal(d, i) === a) return true;
+    }
+    return false;
+  }
+  function sendPacket6(net, ctx, origin, pkt) {
+    let d = origin,
+      inIf = null;
+    const hops = [],
+      path = [origin.id];
+    const fail = (reason, dev, extra) => Object.assign({ ok: false, reason, dev, hops, path, pkt }, extra || {});
+    for (let step = 0; step < 40; step++) {
+      if (owns6(d, pkt.dst)) return { ok: true, dev: d, hops, path, pkt };
+      if (inIf && (d.type !== 'router' || !d.ipv6Routing)) return fail('drop', d);
+      if (inIf && --pkt.ttl <= 0) return fail('ttl', d);
+      const r = routeLookup6(net, d, pkt.dst);
+      if (!r || !up6(d, r.iface)) return fail(inIf ? 'unreach' : 'noroute', d, { replyIp: inIf && inIf.ip6 ? inIf.ip6.addr : null });
+      if (pkt.src == null) pkt.src = isLL(r.nh) && !r.iface.ip6 ? linkLocal(d, r.iface) : r.iface.ip6 ? r.iface.ip6.addr : linkLocal(d, r.iface);
+      if (pkt.origSrc == null) pkt.origSrc = pkt.src;
+      const ep = l2Domain(net, d, r.iface).find(
+        (e) => e.dev !== d && up6(e.dev, e.iface) && ((e.iface.ip6 && e.iface.ip6.addr === r.nh) || linkLocal(e.dev, e.iface) === r.nh)
+      );
+      if (!ep) return fail('arp', d);
+      hops.push({ dev: ep.dev, iface: ep.iface, src: pkt.src });
+      for (const id of ep.path.slice(1)) path.push(id);
+      d = ep.dev;
+      inIf = ep.iface;
+    }
+    return fail('loop', d);
+  }
+  function slaac(net, pc) {
+    const nic = pc.ifaces.FastEthernet0;
+    pc.v6on = true;
+    nic.ip6 = null;
+    pc.gateway6 = null;
+    touch(net);
+    if (!linkUp(pc, nic)) return { ok: false };
+    for (const ep of l2Domain(net, pc, nic)) {
+      const r = ep.dev,
+        i = ep.iface;
+      if (r.type !== 'router' || !r.ipv6Routing || !i.ip6 || i.ip6.plen !== 64 || !ifUp(r, i)) continue;
+      nic.ip6 = { addr: (i.ip6.addr & mask6(64)) | eui64(pc, nic), plen: 64, auto: true };
+      pc.gateway6 = linkLocal(r, i);
+      touch(net);
+      return { ok: true, router: r };
+    }
+    return { ok: false };
+  }
+  NC.ip6 = { ip6Parse, ip6Str, mask6, in6, parsePfx6, linkLocal, isLL, eui64 };
 
   // ------------------------------------------------------------ misc
   function macOf(d, i) {
@@ -816,6 +1169,20 @@
     ping,
     trace,
     dhcpRequest,
+    dhcpRetry,
     macOf,
+    channelInfo,
+    bundleOf,
+    logicalPorts,
+    computeStp,
+    stpRole,
+    portBlocked,
+    bridgeMac,
+    bridgePrio,
+    routingTable6,
+    sendPacket6,
+    slaac,
+    up6,
+    hasV6,
   });
 })(typeof window !== 'undefined' ? window : globalThis);

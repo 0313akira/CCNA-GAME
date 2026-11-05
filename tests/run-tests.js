@@ -6,7 +6,7 @@
  */
 'use strict';
 const path = require('path');
-for (const f of ['netsim.js', 'ios.js', 'levels.js']) require(path.join(__dirname, '..', 'js', f));
+for (const f of ['netsim.js', 'ios.js', 'levels.js', 'lessons.js', 'random.js', 'subnet.js']) require(path.join(__dirname, '..', 'js', f));
 const NC = globalThis.NC;
 
 let fails = 0;
@@ -26,7 +26,7 @@ for (const L of NC.LEVELS) {
     const s = NC.newSession(net, id);
     for (const c of cmds) {
       const r = s.exec(c);
-      if (/Invalid input|Incomplete command|Ambiguous|Invalid command|% /.test(r.out) && !/Creating vlan|key modulus|Generating/.test(r.out))
+      if (/Invalid input|Incomplete command|Ambiguous|Invalid command|% /.test(r.out) && !/Creating vlan|key modulus|Generating|%Warning: portfast/.test(r.out))
         ok(false, `[${L.id}] ${id}: "${c}" => ${r.out.trim()}`);
     }
   }
@@ -48,6 +48,36 @@ for (const L of NC.LEVELS) {
   afterReload.forEach((v, k) => ok(v, `[${L.id}] reload 後に目標未達: ${L.objectives[k].text.replace(/<[^>]+>/g, '')}`));
   console.log((after.every(Boolean) ? '✓ ' : '✗ ') + L.id + ' — ' + L.title);
 }
+
+
+// ---- ランダム障害対応: 故障 1 つずつ & ランダムな組み合わせ
+(function troubles() {
+  const T = NC.TROUBLE;
+  const solve = (L) => {
+    const net = NC.buildLevel(L);
+    const before = NC.evaluate(L, net);
+    for (const [id, cmds] of Object.entries(L.solution)) {
+      NC.runScript(net, id, cmds);
+      NC.dhcpRetry(net);
+    }
+    return { before, after: NC.evaluate(L, net) };
+  };
+  // 故障なし = 全部通る
+  const base = solve(T.makeTroubleLevel({ faults: [] }));
+  ok(base.before.every(Boolean), '[trouble] 正常な基本設定で目標が達成されない: ' + base.before);
+  for (const f of T.FAULTS) {
+    const r = solve(T.makeTroubleLevel({ faults: [f] }));
+    ok(!r.before.every(Boolean), '[trouble] 故障 ' + f.id + ' を入れても目標が達成されてしまう');
+    ok(r.after.every(Boolean), '[trouble] 故障 ' + f.id + ' の修正手順で直らない: ' + r.after);
+  }
+  for (let seed = 1; seed <= 150; seed++) {
+    const L = T.makeTroubleLevel({ count: 3, seed });
+    const r = solve(L);
+    ok(L.faults.length === 3, '[trouble] seed ' + seed + ' 故障数');
+    ok(!r.before.every(Boolean) && r.after.every(Boolean), '[trouble] seed ' + seed + ' ' + L.faults.map((f) => f.id) + ' => ' + r.before + ' / ' + r.after);
+  }
+  console.log('✓ ランダム障害対応 (' + T.FAULTS.length + ' パターン × 150 シード)');
+})();
 
 // ---- 個別の挙動テスト
 (function cliBehaviour() {

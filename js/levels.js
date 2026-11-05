@@ -62,6 +62,21 @@
       const name = NC.ifname.canonIf(port);
       return d.ospf.passiveDefault ? !d.ospf.noPassive.has(name) : d.ospf.passive.has(name);
     },
+    seen: (n, key) => !!n.seen && n.seen.has(key),
+    stpRoot: (n, id, v) => {
+      const I = NC.computeStp(n, v)[id];
+      return !!I && !I.rootPort && I.ports.length > 0;
+    },
+    stpAltn: (n, id, port, v) => NC.stpRole(n, n.devices[id], C.ifc(n, id, port), v) === 'Altn',
+    noBlocked: (n, id) => {
+      const d = n.devices[id];
+      return NC.physPorts(d).every((p) => !NC.portBlocked(n, d, p));
+    },
+    v6: (n, id, name, addr, plen) => {
+      const i = C.ifc(n, id, name);
+      return !!i && !!i.ip6 && i.ip6.addr === NC.ip6.ip6Parse(addr) && i.ip6.plen === plen;
+    },
+    ping6: (n, from, to) => NC.ping(n, n.devices[from], NC.ip6.ip6Parse(to)).ok,
     /** 一時的にインターフェースを落として判定 */
     withShut: (n, id, port, fn) => {
       const i = C.ifc(n, id, port);
@@ -78,6 +93,38 @@
   };
 
   const LEVELS = [
+    // ================================================================ 0
+    {
+      id: 'tutorial',
+      tutorial: true,
+      title: 'チュートリアル: CLI の歩き方',
+      chapter: 'はじめに',
+      difficulty: 1,
+      story:
+        'Cisco 機器はキーボードでコマンドを打って操作します。まずは<b>モード</b>の移動に慣れましょう。右のターミナルに 1 つずつ入力してみてください。<table class="kv"><tr><td><code>R1&gt;</code></td><td>ユーザー EXEC モード: 簡単な確認だけ</td></tr><tr><td><code>R1#</code></td><td>特権 EXEC モード: show・保存・再起動</td></tr><tr><td><code>R1(config)#</code></td><td>グローバル設定モード: 設定を変更</td></tr></table>便利キー: <kbd>?</kbd> ヘルプ / <kbd>Tab</kbd> 補完 / <kbd>↑</kbd> 履歴 / コマンドは <code>conf t</code> のように省略できます。',
+      devices: [
+        { id: 'PC1', type: 'pc', x: 220, y: 210 },
+        { id: 'R1', type: 'router', x: 620, y: 210 },
+      ],
+      links: [['PC1', 'Fa0', 'R1', 'Gi0/0']],
+      setup: { R1: ['interface g0/0', 'ip address 192.168.1.1 255.255.255.0', 'no shutdown'], PC1: ['ipconfig 192.168.1.10 255.255.255.0 192.168.1.1'] },
+      start: 'R1',
+      objectives: [
+        { text: '<code>enable</code> で特権 EXEC モード (<code>Router#</code>) に入る', check: (n) => C.seen(n, 'R1:mode:priv') },
+        { text: '<code>?</code> を入力して使えるコマンドの一覧を見る', check: (n) => C.seen(n, 'R1:help') },
+        { text: '<code>show ip interface brief</code> でインターフェースの状態を確認', check: (n) => C.seen(n, 'R1:show') },
+        { text: '<code>configure terminal</code> でグローバル設定モードに入る', check: (n) => C.seen(n, 'R1:mode:config') },
+        { text: '<code>hostname MyRouter</code> でホスト名を変える', check: (n) => C.hostname(n, 'R1', 'MyRouter') },
+        { text: '<code>end</code> で特権 EXEC モードに戻る', check: (n) => C.seen(n, 'R1:back') },
+      ],
+      hints: [
+        'ターミナルの <code>Router&gt;</code> の後ろに <code>enable</code> と入力して Enter。プロンプトが <code>Router#</code> に変わります。',
+        '<code>?</code> キーを押すと、その場で使えるコマンドが一覧表示されます。<code>sh?</code> のように途中まで打ってから押すと候補が絞られます。',
+        '<code>configure terminal</code> (省略形 <code>conf t</code>) → <code>hostname MyRouter</code> → <code>end</code>',
+      ],
+      solution: { R1: ['enable', '?', 'show ip interface brief', 'configure terminal', 'hostname MyRouter', 'end'] },
+      learn: ['ユーザー EXEC (>) / 特権 EXEC (#) / 設定モード (config)#', '? ヘルプと Tab 補完', 'コマンドの省略形'],
+    },
     // ================================================================ 1
     {
       id: 'first-router',
@@ -358,6 +405,103 @@
       },
       learn: ['switchport mode trunk', 'switchport trunk native vlan', 'switchport trunk allowed vlan', 'show interfaces trunk', 'DTP (dynamic auto / desirable)'],
     },
+    // ================================================================ STP
+    {
+      id: 'stp',
+      title: 'STP でループを防ぐ',
+      chapter: 'スイッチング',
+      difficulty: 3,
+      story:
+        '冗長化のために 3 台のスイッチを三角形に接続しました。ループを防ぐため <b>STP</b> が自動で 1 つのポートをブロックしていますが、古いスイッチ S3 がルートブリッジに選ばれ、<b>コアスイッチ S1 のポートがブロック</b>されてしまっています。<br>S1 をルートブリッジ、S2 をバックアップ (セカンダリ) にして、通信を S1 中心に流しましょう。<br><small>オレンジの点 = STP でブロックされているポート</small>',
+      devices: [
+        { id: 'S1', type: 'switch', x: 430, y: 70 },
+        { id: 'S2', type: 'switch', x: 230, y: 240 },
+        { id: 'S3', type: 'switch', x: 630, y: 240 },
+        { id: 'PC1', type: 'pc', x: 90, y: 340 },
+        { id: 'PC2', type: 'pc', x: 770, y: 340 },
+      ],
+      links: [
+        ['S1', 'Gi0/1', 'S2', 'Gi0/1'],
+        ['S1', 'Gi0/2', 'S3', 'Gi0/1'],
+        ['S2', 'Gi0/2', 'S3', 'Gi0/2'],
+        ['PC1', 'Fa0', 'S2', 'Fa0/1'],
+        ['PC2', 'Fa0', 'S3', 'Fa0/1'],
+      ],
+      setup: {
+        S1: ['hostname S1'],
+        S2: ['hostname S2'],
+        S3: ['hostname S3'],
+        PC1: ['ipconfig 192.168.1.11 255.255.255.0'],
+        PC2: ['ipconfig 192.168.1.12 255.255.255.0'],
+      },
+      start: 'S1',
+      objectives: [
+        { text: 'S1 を VLAN 1 のルートブリッジにする', check: (n) => C.stpRoot(n, 'S1', 1) },
+        { text: 'S2 を VLAN 1 のセカンダリルート (優先度 28672) にする', check: (n) => NC.bridgePrio(C.dev(n, 'S2'), 1) - 1 === 28672 },
+        { text: '全スイッチを Rapid PVST+ (<code>rapid-pvst</code>) に変更', check: (n) => ['S1', 'S2', 'S3'].every((id) => C.dev(n, id).stp.mode === 'rapid-pvst') },
+        { text: 'PC 接続ポート (S2・S3 の Fa0/1) を PortFast に', check: (n) => C.ifc(n, 'S2', 'fa0/1').portfast && C.ifc(n, 'S3', 'fa0/1').portfast },
+        { text: 'ブロックされるのが S2–S3 間 (S3 側) のポートになる', check: (n) => C.stpAltn(n, 'S3', 'gi0/2', 1) && C.noBlocked(n, 'S1') },
+        { text: 'PC1 → PC2 に ping が通る', check: (n) => C.ping(n, 'PC1', '192.168.1.12') },
+      ],
+      hints: [
+        'まず各スイッチで <code>show spanning-tree</code>。「This bridge is the root」はどのスイッチ？ ルートは<b>ブリッジ ID (優先度 + MAC) が最小</b>のスイッチです。',
+        'S1 で <code>spanning-tree vlan 1 root primary</code> (または <code>spanning-tree vlan 1 priority 4096</code>)',
+        'S2 で <code>spanning-tree vlan 1 root secondary</code>。モード変更は <code>spanning-tree mode rapid-pvst</code> (3 台とも)。',
+        'PC 接続ポートで <code>interface fa0/1</code> → <code>spanning-tree portfast</code>',
+      ],
+      solution: {
+        S1: ['enable', 'conf t', 'spanning-tree mode rapid-pvst', 'spanning-tree vlan 1 root primary', 'end'],
+        S2: ['enable', 'conf t', 'spanning-tree mode rapid-pvst', 'spanning-tree vlan 1 root secondary', 'interface fa0/1', 'spanning-tree portfast', 'end'],
+        S3: ['enable', 'conf t', 'spanning-tree mode rapid-pvst', 'interface fa0/1', 'spanning-tree portfast', 'end'],
+      },
+      learn: ['ルートブリッジ選出 (ブリッジ ID)', 'spanning-tree vlan X root primary / priority', 'ポートの役割 Root / Desg / Altn', 'Rapid PVST+', 'PortFast'],
+    },
+    // ================================================================ EtherChannel
+    {
+      id: 'etherchannel',
+      title: 'EtherChannel で帯域を束ねる',
+      chapter: 'スイッチング',
+      difficulty: 3,
+      story:
+        'S1–S2 間の帯域が足りないので、ケーブルを 2 本に増やしました。ところが <b>STP がループと判断して 1 本をブロック</b>しているため、帯域は増えていません (オレンジの点)。<br>2 本を <b>LACP</b> で束ねて 1 本の論理リンク <b>Port-channel 1</b> にし、両方のリンクを使えるようにしてください。Gi0/1・Gi0/2 はすでにトランクに設定されています。',
+      devices: [
+        { id: 'S1', type: 'switch', x: 260, y: 170 },
+        { id: 'S2', type: 'switch', x: 600, y: 170 },
+        { id: 'PC1', type: 'pc', x: 120, y: 330 },
+        { id: 'PC2', type: 'pc', x: 740, y: 330 },
+      ],
+      links: [
+        ['S1', 'Gi0/1', 'S2', 'Gi0/1'],
+        ['S1', 'Gi0/2', 'S2', 'Gi0/2'],
+        ['PC1', 'Fa0', 'S1', 'Fa0/1'],
+        ['PC2', 'Fa0', 'S2', 'Fa0/1'],
+      ],
+      setup: {
+        S1: ['hostname S1', 'vlan 10', 'name SALES', 'interface fa0/1', 'switchport mode access', 'switchport access vlan 10', 'interface range g0/1 - 2', 'switchport mode trunk'],
+        S2: ['hostname S2', 'vlan 10', 'name SALES', 'interface fa0/1', 'switchport mode access', 'switchport access vlan 10', 'interface range g0/1 - 2', 'switchport mode trunk'],
+        PC1: ['ipconfig 192.168.10.11 255.255.255.0'],
+        PC2: ['ipconfig 192.168.10.12 255.255.255.0'],
+      },
+      start: 'S1',
+      objectives: [
+        { text: 'S1 の Gi0/1・Gi0/2 を channel-group 1 (LACP) に', check: (n) => { const i = NC.channelInfo(C.dev(n, 'S1'), 1); return i.members.length === 2 && i.proto === 'LACP'; } },
+        { text: 'S2 の Gi0/1・Gi0/2 を channel-group 1 (LACP) に', check: (n) => { const i = NC.channelInfo(C.dev(n, 'S2'), 1); return i.members.length === 2 && i.proto === 'LACP'; } },
+        { text: 'Port-channel 1 が 2 本とも束ねられて up (SU / P)', check: (n) => ['S1', 'S2'].every((id) => NC.channelInfo(C.dev(n, id), 1).bundled.length === 2) },
+        { text: 'Port-channel 1 がトランクになっている', check: (n) => ['S1', 'S2'].every((id) => { const po = C.ifc(n, id, 'po1'); return !!po && po.mode === 'trunk'; }) },
+        { text: 'STP でブロックされているポートがない', check: (n) => C.noBlocked(n, 'S1') && C.noBlocked(n, 'S2') },
+        { text: 'PC1 → PC2 に ping が通る', check: (n) => C.ping(n, 'PC1', '192.168.10.12') },
+      ],
+      hints: [
+        '<code>show spanning-tree</code> で、どちらかのスイッチの Gi0/2 が <code>Altn BLK</code> になっていることを確認しましょう。',
+        '<code>interface range g0/1 - 2</code> → <code>channel-group 1 mode active</code> (LACP)。もう片側は <code>active</code> か <code>passive</code>。',
+        '<code>show etherchannel summary</code> で <code>Po1(SU)</code>・<code>Gi0/1(P)</code> になれば成功。<code>interface port-channel 1</code> の設定は所属ポートにも反映されます。',
+      ],
+      solution: {
+        S1: ['enable', 'conf t', 'interface range g0/1 - 2', 'channel-group 1 mode active', 'interface port-channel 1', 'switchport mode trunk', 'end'],
+        S2: ['enable', 'conf t', 'interface range g0/1 - 2', 'channel-group 1 mode passive', 'interface port-channel 1', 'switchport mode trunk', 'end'],
+      },
+      learn: ['channel-group N mode active / passive (LACP)', 'desirable / auto (PAgP)、on (交渉なし)', 'interface port-channel', 'show etherchannel summary', 'STP からは 1 本の論理リンクに見える'],
+    },
     // ================================================================ 7
     {
       id: 'router-on-a-stick',
@@ -518,6 +662,54 @@
         R3: ['enable', 'conf t', 'router ospf 1', 'router-id 3.3.3.3', 'network 192.168.3.0 0.0.0.255 area 0', 'network 10.0.13.0 0.0.0.3 area 0', 'network 10.0.23.0 0.0.0.3 area 0', 'passive-interface g0/0', 'end'],
       },
       learn: ['router ospf / router-id', 'network ... wildcard ... area 0', 'passive-interface', 'show ip ospf neighbor', 'DR / BDR'],
+    },
+    // ================================================================ IPv6
+    {
+      id: 'ipv6',
+      title: 'IPv6 アドレスとルーティング',
+      chapter: 'ルーティング',
+      difficulty: 3,
+      story:
+        '新しい拠点を <b>IPv6</b> で構築します。R2 側は設定済みです。R1 を設定してください。PC1 は手動設定せず、ルーターからの通知 (RA) で自動設定 (<b>SLAAC</b>) させます。<table class="kv"><tr><td>R1 G0/0 (PC1 側)</td><td>2001:DB8:1::1/64</td></tr><tr><td>R1 G0/1 (R2 側)</td><td>2001:DB8:12::1/64</td></tr><tr><td>R2 G0/0</td><td>2001:DB8:12::2/64</td></tr><tr><td>PC2 の LAN</td><td>2001:DB8:2::/64 (PC2 = ::10)</td></tr></table>',
+      devices: [
+        { id: 'PC1', type: 'pc', x: 90, y: 210 },
+        { id: 'R1', type: 'router', x: 310, y: 210 },
+        { id: 'R2', type: 'router', x: 550, y: 210 },
+        { id: 'PC2', type: 'pc', x: 770, y: 210 },
+      ],
+      links: [
+        ['PC1', 'Fa0', 'R1', 'Gi0/0'],
+        ['R1', 'Gi0/1', 'R2', 'Gi0/0'],
+        ['R2', 'Gi0/1', 'PC2', 'Fa0'],
+      ],
+      setup: {
+        R1: ['hostname R1'],
+        R2: ['hostname R2', 'ipv6 unicast-routing', 'interface g0/0', 'ipv6 address 2001:DB8:12::2/64', 'no shutdown', 'interface g0/1', 'ipv6 address 2001:DB8:2::1/64', 'no shutdown', 'exit', 'ipv6 route ::/0 2001:DB8:12::1'],
+        PC2: ['ipv6config 2001:DB8:2::10/64 2001:DB8:2::1'],
+      },
+      start: 'R1',
+      objectives: [
+        { text: 'R1 で IPv6 ルーティングを有効化 (<code>ipv6 unicast-routing</code>)', check: (n) => C.dev(n, 'R1').ipv6Routing },
+        { text: 'R1 G0/0 に 2001:DB8:1::1/64 を設定し有効化', check: (n) => C.v6(n, 'R1', 'g0/0', '2001:db8:1::1', 64) && C.up(n, 'R1', 'g0/0') },
+        { text: 'R1 G0/1 に 2001:DB8:12::1/64 を設定し有効化', check: (n) => C.v6(n, 'R1', 'g0/1', '2001:db8:12::1', 64) && C.up(n, 'R1', 'g0/1') },
+        { text: 'R1 に 2001:DB8:2::/64 へのスタティックルート', check: (n) => C.dev(n, 'R1').staticRoutes6.some((r) => r.net === NC.ip6.ip6Parse('2001:db8:2::') && r.plen === 64) },
+        { text: 'PC1 が SLAAC で 2001:DB8:1::/64 のアドレスを取得', check: (n) => { const i = C.dev(n, 'PC1').ifaces.FastEthernet0; return !!i.ip6 && !!i.ip6.auto && NC.ip6.in6(i.ip6.addr, NC.ip6.ip6Parse('2001:db8:1::'), 64); } },
+        { text: 'PC1 → PC2 (2001:DB8:2::10) に ping が通る', check: (n) => C.ping6(n, 'PC1', '2001:db8:2::10') },
+      ],
+      hints: [
+        'グローバル設定モードで <code>ipv6 unicast-routing</code>。これがないとルーターは IPv6 を転送せず、RA も送りません。',
+        '<code>interface g0/0</code> → <code>ipv6 address 2001:DB8:1::1/64</code> → <code>no shutdown</code> (G0/1 も同様)',
+        '<code>ipv6 route 2001:DB8:2::/64 2001:DB8:12::2</code>',
+        'PC1 で <code>ipv6config autoconfig</code>。ゲートウェイがルーターの <code>FE80::</code> (リンクローカル) になることを確認しましょう。',
+      ],
+      solution: {
+        R1: [
+          'enable', 'conf t', 'ipv6 unicast-routing', 'interface g0/0', 'ipv6 address 2001:DB8:1::1/64', 'no shutdown',
+          'interface g0/1', 'ipv6 address 2001:DB8:12::1/64', 'no shutdown', 'exit', 'ipv6 route 2001:DB8:2::/64 2001:DB8:12::2', 'end',
+        ],
+        PC1: ['ipv6config autoconfig'],
+      },
+      learn: ['IPv6 アドレスの省略表記 (::)', 'ipv6 unicast-routing', 'ipv6 address / ipv6 route', 'SLAAC と EUI-64', 'リンクローカルアドレス FE80::'],
     },
     // ================================================================ 10
     {
