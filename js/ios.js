@@ -778,6 +778,26 @@
   };
   const MODE_HELP = { config: 'config', if: 'if', router: 'router', vlan: 'vlan', line: 'line', dhcp: 'dhcp', acl: 'acl' };
 
+  // ------------------------------------------------------------ 初心者向けヒント
+  const CFG_WORDS = /^(hostname|int|interface|ip|ipv6|router|vlan|no|access-list|line|enable|service|banner|username|crypto|spanning-tree|switchport|shut|shutdown|description|network|encapsulation|channel-group)$/i;
+  const EXEC_WORDS = /^(sh|sho|show|ping|traceroute|copy|write|wr|reload|clear)$/i;
+  function maskLike(wc) {
+    return (wc >>> 0) >= 0x80000000 && maskToPrefix(wc) !== null && wc !== 0xffffffff;
+  }
+  /** エラー時 (または成功時) に、初心者がつまずきやすいポイントを日本語で補足する */
+  function beginnerTip(mode, line, kind) {
+    const t = line.trim();
+    const first = (t.split(/\s+/)[0] || '').toLowerCase();
+    if (/\d+\.\d+\.\d+\.\d+\/\d{1,2}\b/.test(t)) return 'IOS ではマスクを /24 のようには書けません。ドット表記で書きます (例: /24 → 255.255.255.0、/30 → 255.255.255.252)';
+    if (mode === 'user' && (/^conf/i.test(first) || CFG_WORDS.test(first))) return '設定を変えるには、まず enable で特権 EXEC モード (#) に入り、configure terminal で設定モードに入ります';
+    if (mode === 'priv' && CFG_WORDS.test(first)) return '設定コマンドは configure terminal (conf t) で設定モード (config)# に入ってから入力します';
+    if (mode !== 'user' && mode !== 'priv' && EXEC_WORDS.test(first)) return '設定モードで show や ping を使うときは、先頭に do を付けます (例: do show ip interface brief)';
+    if (kind === 'ambiguous') return '省略しすぎて候補が複数あります。もう少し長く入力するか、? で候補を確認しましょう';
+    if (kind === 'incomplete') return '続きの入力が必要です。最後に「スペース + ?」を入力すると、次に入れるものが表示されます';
+    if (kind === 'invalid') return '^ の位置のつづりや値を確認しましょう。? で、そこに入力できるものが表示されます';
+    return null;
+  }
+
   // ------------------------------------------------------------ IOS session
   class IosSession {
     constructor(net, devId) {
@@ -855,10 +875,16 @@
           if (k && k !== AMBIG) filter = { k, re: new RegExp(fm[2].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') };
         }
       }
+      const modeBefore = this.mode;
       try {
         this.dispatch(line, res);
+        // 成功しても意図と違いそうな入力 (ワイルドカードの代わりにサブネットマスク)
+        const m = line.trim().match(/^(?:no\s+)?(network|access-list\s+\d+\s+(?:permit|deny))\s+\d+\.\d+\.\d+\.\d+\s+(\d+\.\d+\.\d+\.\d+)/i);
+        if (m && maskLike(ipToInt(m[2])))
+          res.tip = m[2] + ' はサブネットマスクの形です。ここにはワイルドカードマスク (マスクを反転したもの) を書きます (例: 255.255.255.0 → 0.0.0.255)';
       } catch (e) {
         if (!(e instanceof CliError)) throw e;
+        res.tip = beginnerTip(modeBefore, line, e.kind);
         res.out.length = 0;
         if (e.kind === 'invalid') res.out.push(' '.repeat(promptLen + (e.pos || 0)) + '^', "% Invalid input detected at '^' marker.", '');
         else if (e.kind === 'ambiguous') res.out.push('% Ambiguous command:  "' + line.trim() + '"');
@@ -885,7 +911,7 @@
       }
       this.track(wasCfg);
       NC.touch(this.net);
-      return { out: res.out.join('\n'), events: res.events };
+      return { out: res.out.join('\n'), events: res.events, tip: res.tip || null };
     }
 
     dispatch(line, res) {
@@ -2629,6 +2655,7 @@
           const gw = t[3] ? ipToInt(t[3]) : null;
           if (ipv === null || mask === null || maskToPrefix(mask) === null || (t[3] && gw === null) || t.length > 4) {
             res.out.push('Invalid command. 使い方: ipconfig <IPアドレス> <サブネットマスク> [デフォルトゲートウェイ]');
+            if (/\//.test(line)) res.tip = 'マスクは /24 ではなく 255.255.255.0 のように書きます (例: ipconfig 192.168.1.10 255.255.255.0 192.168.1.1)';
           } else {
             nic.ip = ipv;
             nic.mask = mask;
@@ -2687,7 +2714,7 @@
         res.out.push('Invalid Command.  (PC では IOS コマンドは使えません。help でコマンド一覧)');
       } else res.out.push('Invalid Command.  (help でコマンド一覧を表示)');
       NC.touch(this.net);
-      return { out: res.out.join('\n'), events: res.events };
+      return { out: res.out.join('\n'), events: res.events, tip: res.tip || null };
     }
   }
 

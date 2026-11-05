@@ -352,7 +352,7 @@
         '<g class="dev' + (S.cur === d.id ? ' sel' : '') + '" data-id="' + d.id + '" transform="translate(' + d.x + ',' + d.y + ')">' +
         '<circle class="halo" r="' + (r + 10) + '"/>' +
         iconSvg(d.type) +
-        '<text class="dev-label" y="' + (r + 22) + '">' + esc(NC.isHost(d) ? d.id : d.hostname) + (d.locked ? ' 🔒' : '') + '</text>' +
+        '<text class="dev-label" y="' + (r + 22) + '">' + esc(devName(d)) + (d.locked ? ' 🔒' : '') + '</text>' +
         (sub ? '<text class="dev-sub" y="' + (r + 37) + '">' + esc(sub) + '</text>' : '') +
         '</g>';
     }
@@ -434,8 +434,8 @@
       const d = S.net.devices[spec.id];
       const b = document.createElement('button');
       b.className = 'tab' + (S.cur === d.id ? ' active' : '');
-      b.innerHTML = '<span class="ti">' + icon[d.type] + '</span>' + esc(NC.isHost(d) ? d.id : d.hostname);
-      b.addEventListener('click', () => selectDevice(d.id));
+      b.innerHTML = '<span class="ti">' + icon[d.type] + '</span>' + esc(devName(d));
+      b.addEventListener('click', () => selectDevice(d.id, true));
       tabs.appendChild(b);
     }
   }
@@ -491,7 +491,7 @@
     if (isMobile()) return; // モバイルでは勝手にキーボードを出さない
     $('#cmd').focus();
   }
-  function selectDevice(id) {
+  function selectDevice(id, fromTab) {
     if (!S.terms[id]) return;
     S.cur = id;
     renderTabs();
@@ -499,6 +499,12 @@
     renderTopo();
     $('#cmd').value = '';
     if (!isMobile()) $('#cmd').focus({ preventScroll: true });
+    else if (!fromTab) $('.term-panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); // スマホではターミナルまでスクロール
+  }
+  /** 表示名: ホスト名が ID と違うときは「Router (R1)」のように両方を出す */
+  function devName(d) {
+    if (NC.isHost(d) || d.hostname === d.id) return d.id;
+    return d.hostname + ' (' + d.id + ')';
   }
 
   /** コマンド実行 (ユーザー入力・自動入力の共通処理) */
@@ -517,6 +523,7 @@
     const got = NC.dhcpRetry(S.net);
     const after = NC.snapshot(S.net);
     if (r.out) pushOut(id, r.out);
+    if (r.tip) pushOut(id, '💡 ' + r.tip, 'tip');
     const logs = NC.diffLogs(S.net, before, after);
     for (const [did, lines] of Object.entries(logs)) if (S.terms[did]) pushOut(did, lines.join('\n'), 'log');
     for (const pid of got) if (S.terms[pid]) pushOut(pid, 'DHCP: IP アドレス ' + NC.ip.intToIp(S.net.devices[pid].ifaces.FastEthernet0.ip) + ' を自動取得しました', 'ok');
