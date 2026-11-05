@@ -1,0 +1,10 @@
+{
+  "name": "netconfig-quest",
+  "version": "1.0.0",
+  "description": "CCNA ネットワーク設定トレーニングゲーム (Cisco IOS CLI シミュレーター)",
+  "private": true,
+  "scripts": {
+    "test": "node tests/run-tests.js"
+  },
+  "license": "MIT"
+}

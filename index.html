@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NetConfig Quest — CCNA ネットワーク設定ゲーム</title>
+    <meta name="description" content="Cisco IOS コマンドを実際に打ち込んでネットワークを構築する、CCNA 対策のブラウザゲーム" />
+    <link rel="stylesheet" href="css/style.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='28' fill='%231f6feb'/><path d='M18 32h28M32 18v28M24 24l-6 8 6 8M40 24l6 8-6 8' stroke='white' stroke-width='4' fill='none' stroke-linecap='round'/></svg>" />
+  </head>
+  <body>
+    <!-- ============================ HOME ============================ -->
+    <section id="home" class="screen active">
+      <header class="hero">
+        <div class="hero-badge">CCNA 200-301 対応</div>
+        <h1>NetConfig <span>Quest</span></h1>
+        <p class="lead">本物そっくりの Cisco IOS CLI でコマンドを打ち込み、<br class="pc-only" />ネットワークを組み上げていく <b>CCNA ネットワーク設定</b>トレーニングゲーム</p>
+        <div class="hero-stats">
+          <div><b id="stat-clear">0</b><span>クリア</span></div>
+          <div><b id="stat-stars">0</b><span>スター</span></div>
+          <div><b id="stat-total">0</b><span>ミッション</span></div>
+        </div>
+      </header>
+
+      <div class="howto">
+        <div class="howto-item"><span class="num">1</span><div><b>トポロジの機器をクリック</b><br />ルーター・スイッチ・PC のターミナルが開きます</div></div>
+        <div class="howto-item"><span class="num">2</span><div><b>IOS コマンドを入力</b><br /><code>?</code> でヘルプ、<kbd>Tab</kbd> で補完、省略形 (<code>conf t</code>) もOK</div></div>
+        <div class="howto-item"><span class="num">3</span><div><b>目標を自動判定</b><br />すべての目標を達成するとミッションクリア！</div></div>
+      </div>
+
+      <div id="level-list"></div>
+
+      <footer class="home-foot">
+        <button class="btn ghost" id="btn-cheat-home">📖 コマンド早見表</button>
+        <button class="btn ghost" id="btn-reset-progress">進捗をリセット</button>
+        <p>※ 学習用シミュレーターです。実機の挙動を簡略化している部分があります。Cisco は Cisco Systems, Inc. の商標です。</p>
+      </footer>
+    </section>
+
+    <!-- ============================ GAME ============================ -->
+    <section id="game" class="screen">
+      <header class="topbar">
+        <button class="btn icon" id="btn-back" title="ミッション一覧へ">←</button>
+        <div class="title-wrap">
+          <span class="chapter" id="lv-chapter"></span>
+          <h2 id="lv-title"></h2>
+        </div>
+        <div class="timer" id="timer">00:00</div>
+        <div class="actions">
+          <button class="btn" id="btn-hint">💡 ヒント</button>
+          <button class="btn" id="btn-answer">🔑 解答例</button>
+          <button class="btn" id="btn-cheat">📖 早見表</button>
+          <button class="btn" id="btn-reset">↺ リセット</button>
+        </div>
+      </header>
+
+      <div class="game-body">
+        <div class="left">
+          <div class="panel topo-panel">
+            <div class="panel-head">
+              <span>トポロジ</span>
+              <span class="legend"><i class="dot up"></i>up <i class="dot down"></i>down <i class="dot admin"></i>shutdown <i class="trunk-mark"></i>trunk</span>
+            </div>
+            <svg id="topo" viewBox="0 0 860 420" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+          <div class="panel mission-panel">
+            <div class="panel-head"><span>ミッション</span><span id="obj-count" class="obj-count"></span></div>
+            <div class="mission-scroll">
+              <p class="story" id="lv-story"></p>
+              <ul class="objectives" id="objectives"></ul>
+              <div id="hints"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="right panel term-panel">
+          <div class="tabs" id="tabs"></div>
+          <div class="term" id="term">
+            <div class="term-out" id="term-out"></div>
+            <div class="term-in">
+              <span class="prompt" id="prompt"></span><input id="cmd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="コマンド入力" />
+            </div>
+          </div>
+          <div class="keybar">
+            <button data-key="?">?</button>
+            <button data-key="Tab">Tab</button>
+            <button data-key="ArrowUp">↑</button>
+            <button data-key="ArrowDown">↓</button>
+            <button data-key="ctrlz">Ctrl+Z</button>
+            <button data-key="clear">clear</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ MODAL ============================ -->
+    <div class="modal-bg" id="modal-bg">
+      <div class="modal" id="modal">
+        <button class="modal-x" id="modal-x" aria-label="閉じる">×</button>
+        <div id="modal-body"></div>
+      </div>
+    </div>
+
+    <script src="js/netsim.js"></script>
+    <script src="js/ios.js"></script>
+    <script src="js/levels.js"></script>
+    <script src="js/cheatsheet.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
